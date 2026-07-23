@@ -2,19 +2,6 @@
 
 #include "LineNumEdit.hpp"
 
-static INT getLogicalLineIndexFromCharIndex(LPCTSTR psz, INT ich)
-{
-    INT iLine = 0;
-    while (*psz && ich > 0)
-    {
-        if (*psz == TEXT('\n'))
-            ++iLine;
-        ++psz;
-        --ich;
-    }
-    return iLine;
-}
-
 /////////////////////////////////////////////////////////////////////////////////////////
 // LineNumStatic
 
@@ -25,6 +12,10 @@ LineNumStatic::LineNumStatic(HWND hwnd)
     , m_linedelta(1)
     , m_hbm(NULL)
     , m_siz { 0, 0 }
+    , m_bstrTextCache(NULL)
+    , m_cchCache(0)
+    , m_cLogicalLinesCache(0)
+    , m_bTextCacheValid(FALSE)
 {
     ::SHStrDup(TEXT("%d"), &m_format);
 }
@@ -33,6 +24,7 @@ LineNumStatic::~LineNumStatic()
 {
     ::DeleteObject(m_hbm);
     ::CoTaskMemFree(m_format);
+    ::SysFreeString(m_bstrTextCache);
 }
 
 LRESULT CALLBACK
@@ -135,12 +127,39 @@ void LineNumStatic::OnDrawClient(HWND hwnd, HDC hDC)
     HGDIOBJ hFontOld = ::SelectObject(hdcMem, hFont);
     ::SetBkMode(hdcMem, TRANSPARENT);
     {
-        // get the edit text
-        INT cch = Edit_GetTextLength(hwndEdit);
-        BSTR bstrText = ::SysAllocStringLen(NULL, cch);
+        // Rebuild the cached copy of the edit text (and its total logical
+        // line count) only if it was invalidated by an actual text change.
+        // A pure scroll/caret repaint -- e.g. mouse-wheel scrolling, which
+        // can fire many repaints back-to-back -- reuses the cache as-is,
+        // instead of re-copying and re-scanning the whole document on every
+        // single repaint.
+        if (!m_bTextCacheValid)
+        {
+            ::SysFreeString(m_bstrTextCache);
+            m_bstrTextCache = NULL;
+
+            INT cch = Edit_GetTextLength(hwndEdit);
+            m_bstrTextCache = ::SysAllocStringLen(NULL, cch);
+            if (m_bstrTextCache)
+            {
+                Edit_GetText(hwndEdit, m_bstrTextCache, cch + 1);
+                m_cchCache = cch;
+
+                m_cLogicalLinesCache = 0;
+                for (LPCTSTR psz = m_bstrTextCache; *psz; ++psz)
+                {
+                    if (*psz == TEXT('\n'))
+                        ++m_cLogicalLinesCache;
+                }
+            }
+            m_bTextCacheValid = TRUE;
+        }
+
+        BSTR bstrText = m_bstrTextCache;
         if (bstrText)
         {
-            Edit_GetText(hwndEdit, bstrText, cch + 1);
+            INT cch = m_cchCache;
+            INT cLogicalLines = m_cLogicalLinesCache;
 
             // initialize variables for lines loop
             INT iPhysicalLine = Edit_GetFirstVisibleLine(hwndEdit);
@@ -148,8 +167,17 @@ void LineNumStatic::OnDrawClient(HWND hwnd, HDC hDC)
             if (ich == -1) // beyond the limit
                 ich = cch;
             INT ichOld = ich;
-            INT cLogicalLines = ::getLogicalLineIndexFromCharIndex(bstrText, MAXLONG);
-            INT iLogicalLine = ::getLogicalLineIndexFromCharIndex(bstrText, ich);
+
+            // Newlines up to the first visible char still need to be
+            // counted per paint since the viewport (and so ich) can change,
+            // but this is now a scan of just [0, ich) rather than also
+            // re-copying and re-scanning the entire document as before.
+            INT iLogicalLine = 0;
+            for (INT i = 0; i < ich && bstrText[i]; ++i)
+            {
+                if (bstrText[i] == L'\n')
+                    ++iLogicalLine;
+            }
 
             INT iOldLogicalLine;
             if (ich == 0)
@@ -197,29 +225,33 @@ void LineNumStatic::OnDrawClient(HWND hwnd, HDC hDC)
                 yLine += cyLine;
                 ++iPhysicalLine;
 
-                // go to next newline
+                // Jump straight to the start of the next physical line with a
+                // single EM_LINEINDEX call. This replaces the old approach of
+                // scanning character-by-character and calling
+                // Edit_LineFromChar (a window message) once per character,
+                // which was O(line length) messages per drawn line.
                 ichOld = ich;
-                while (bstrText[ich])
-                {
-                    if (Edit_LineFromChar(hwndEdit, ich) == iPhysicalLine)
-                        break;
-                    if (bstrText[ich] == L'\n')
-                    {
-                        ++ich;
-                        break;
-                    }
-                    ++ich;
-                }
+                INT ichNext = Edit_LineIndex(hwndEdit, iPhysicalLine);
+                ich = (ichNext == -1) ? cch : ichNext;
 
-                // update logical line if necessary
+                // Update the logical line incrementally by counting newlines
+                // only in the [ichOld, ich) span just advanced over, instead
+                // of rescanning the buffer from the beginning every
+                // iteration (which made this O(n) per drawn line).
                 iOldLogicalLine = iLogicalLine;
-                iLogicalLine = ::getLogicalLineIndexFromCharIndex(bstrText, ich);
+                for (INT i = ichOld; i < ich; ++i)
+                {
+                    if (bstrText[i] == L'\n')
+                        ++iLogicalLine;
+                }
                 if (iLogicalLine == iOldLogicalLine && ich == ichOld)
                     break;
             } while (yLine < rcClient.bottom); // beyond the client area?
 
-            // clean up
-            ::SysFreeString(bstrText);
+            // NOTE: bstrText is the persistent cache (m_bstrTextCache), not
+            // a local allocation, so it is intentionally NOT freed here. It
+            // is freed/rebuilt in the "!m_bTextCacheValid" block above, and
+            // in the destructor.
         }
     }
     ::SelectObject(hdcMem, hFontOld);
@@ -244,6 +276,10 @@ void LineNumStatic::OnDrawClient(HWND hwnd, HDC hDC)
 
 void LineNumEdit::Prepare()
 {
+    if (m_bInPrepare)
+        return;
+    m_bInPrepare = TRUE;
+
     // sanity check
     assert(::IsWindow(m_hwnd));
     assert(!!(::GetWindowLong(m_hwnd, GWL_STYLE) & WS_CHILD));
@@ -275,6 +311,8 @@ void LineNumEdit::Prepare()
                                          NULL, ::GetModuleHandle(NULL), NULL);
         m_hwndStatic.Attach(hwndStatic);
     }
+
+    m_bInPrepare = FALSE;
 }
 
 LRESULT CALLBACK
@@ -329,10 +367,23 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             rgb &= 0x00FFFFFF;
             return rgb;
         }
-    case WM_SETTEXT: case WM_CHAR: case WM_KEYDOWN: case WM_KEYUP: case WM_VSCROLL:
-    case WM_CUT: case WM_PASTE: case WM_UNDO: case WM_MOUSEWHEEL:
-    case EM_UNDO: case EM_SCROLL: case EM_SCROLLCARET: case EM_LINESCROLL:
-    case EM_REPLACESEL: case EM_SETHANDLE:
+    case WM_SETTEXT: case WM_CHAR: case WM_KEYDOWN: case WM_KEYUP:
+    case WM_CUT: case WM_PASTE: case WM_UNDO:
+    case EM_UNDO: case EM_REPLACESEL: case EM_SETHANDLE:
+        // These may change the text (WM_KEYDOWN/UP are included because
+        // e.g. the Delete key modifies text without a WM_CHAR), so the
+        // static's cached copy of the text must be invalidated.
+        ret = DefWndProc(hwnd, uMsg, wParam, lParam);
+        m_hwndStatic.InvalidateTextCache();
+        m_hwndStatic.Redraw();
+        return ret;
+    case WM_VSCROLL: case WM_MOUSEWHEEL:
+    case EM_SCROLL: case EM_SCROLLCARET: case EM_LINESCROLL:
+        // Pure scrolling/caret-visibility messages: the text itself is
+        // unchanged, so just repaint and let the static reuse its cached
+        // text/line-count instead of re-copying and re-scanning the whole
+        // document. This matters a lot for mouse-wheel scrolling, which can
+        // fire many of these messages back-to-back.
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
         m_hwndStatic.Redraw();
         return ret;

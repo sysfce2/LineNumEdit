@@ -137,12 +137,32 @@ public:
         return ::GetParent(m_hwnd);
     }
 
+    // Call this whenever the edit control's TEXT may have changed (typing,
+    // paste, undo, SetWindowText, ...). Pure scrolling/caret-navigation
+    // repaints should NOT call this, so that OnDrawClient can keep reusing
+    // the cached text/line-count instead of re-copying and re-scanning the
+    // whole document on every repaint (this matters a lot for mouse-wheel
+    // scrolling, which fires many repaints in quick succession).
+    void InvalidateTextCache()
+    {
+        m_bTextCacheValid = FALSE;
+    }
+
 protected:
     COLORREF m_rgbText, m_rgbBack;
     INT m_linedelta;
     LPWSTR m_format;
     HBITMAP m_hbm;
     SIZE m_siz;
+
+    // Cache of the full edit-control text plus its total logical (newline-
+    // separated) line count. Rebuilt only when InvalidateTextCache() has
+    // been called since the last paint; reused as-is for scroll-only
+    // repaints.
+    BSTR m_bstrTextCache;
+    INT m_cchCache;
+    INT m_cLogicalLinesCache;
+    BOOL m_bTextCacheValid;
 
     INT GetLineHeight() const
     {
@@ -237,6 +257,7 @@ protected:
     INT m_num_digits;
     INT m_cxColumn;
     LineNumStatic m_hwndStatic;
+    BOOL m_bInPrepare = FALSE;
 
     INT GetColumnWidth();
     void UpdateTopAndBottom();
