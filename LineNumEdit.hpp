@@ -223,12 +223,12 @@ public:
 
     void Prepare();
 
-    void RefreshColors()
+    void RefreshColors(BOOL bErase = FALSE)
     {
         if (::IsWindowEnabled(m_hwnd) && !(GetWindowLong(m_hwnd, GWL_STYLE) & ES_READONLY))
-            m_hwndStatic.SetColors(COLOR_WINDOWTEXT, COLOR_3DFACE);
+            m_hwndStatic.SetColors(COLOR_WINDOWTEXT, COLOR_3DFACE, bErase);
         else
-            m_hwndStatic.SetColors(COLOR_GRAYTEXT, COLOR_3DFACE);
+            m_hwndStatic.SetColors(COLOR_GRAYTEXT, COLOR_3DFACE, bErase);
     }
 
     void SetLineNumberFormat(LPCTSTR format = NULL)
@@ -258,6 +258,7 @@ protected:
     INT m_cxColumn;
     LineNumStatic m_hwndStatic;
     BOOL m_bInPrepare = FALSE;
+    BOOL m_bSetRedraw = TRUE;
 
     INT GetColumnWidth();
     void UpdateTopAndBottom();

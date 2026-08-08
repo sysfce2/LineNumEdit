@@ -321,9 +321,13 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     LRESULT ret;
     switch (uMsg)
     {
-    case WM_ENABLE: case WM_SYSCOLORCHANGE: case EM_SETREADONLY:
+    case WM_ENABLE: case WM_SYSCOLORCHANGE:
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
         RefreshColors();
+        return ret;
+    case EM_SETREADONLY:
+        ret = DefWndProc(hwnd, uMsg, wParam, lParam);
+        RefreshColors(FALSE);
         return ret;
     case LNEM_SETLINENUMFORMAT:
         SetLineNumberFormat(reinterpret_cast<LPCTSTR>(lParam));
@@ -342,14 +346,16 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 ::SetProp(m_hwndStatic, pszName, reinterpret_cast<HANDLE>(lParam));
             }
         }
-        m_hwndStatic.Redraw();
+        if (m_bSetRedraw)
+            m_hwndStatic.Redraw();
         return 0;
     case LNEM_CLEARLINEMARKS:
         m_hwndStatic.DeleteProps(m_hwndStatic);
         return 0;
     case LNEM_SETLINEDELTA:
         m_hwndStatic.m_linedelta = INT(wParam);
-        m_hwndStatic.Redraw();
+        if (m_bSetRedraw)
+            m_hwndStatic.Redraw();
         return 0;
     case LNEM_SETCOLUMNWIDTH:
         m_cxColumn = INT(wParam);
@@ -375,7 +381,8 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         // static's cached copy of the text must be invalidated.
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
         m_hwndStatic.InvalidateTextCache();
-        m_hwndStatic.Redraw();
+        if (m_bSetRedraw)
+            m_hwndStatic.Redraw();
         return ret;
     case WM_VSCROLL: case WM_MOUSEWHEEL:
     case EM_SCROLL: case EM_SCROLLCARET: case EM_LINESCROLL:
@@ -385,7 +392,8 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         // document. This matters a lot for mouse-wheel scrolling, which can
         // fire many of these messages back-to-back.
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
-        m_hwndStatic.Redraw();
+        if (m_bSetRedraw)
+            m_hwndStatic.Redraw();
         return ret;
     case WM_SIZE: case WM_SETFONT:
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
@@ -395,6 +403,12 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
         m_cxColumn = 0; // clear cache
         Prepare();
+        return ret;
+    case WM_SETREDRAW:
+        ret = DefWndProc(hwnd, uMsg, wParam, lParam);
+        if (m_hwndStatic)
+            ::SendMessage(m_hwndStatic, WM_SETREDRAW, wParam, lParam);
+        m_bSetRedraw = (BOOL)wParam;
         return ret;
     }
     return DefWndProc(hwnd, uMsg, wParam, lParam);
