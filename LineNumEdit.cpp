@@ -325,6 +325,11 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
         RefreshColors();
         return ret;
+    case WM_PAINT:
+        ret = DefWndProc(hwnd, uMsg, wParam, lParam);
+        if (m_bSetRedraw)
+            m_hwndStatic.Redraw();
+        return ret;
     case EM_SETREADONLY:
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
         RefreshColors(FALSE);
