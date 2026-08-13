@@ -57,6 +57,10 @@ LineNumStatic::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         DeleteProps(hwnd);
         break;
+    case WM_MOUSEHWHEEL:
+        hwndEdit = GetEdit();
+        PostMessage(hwndEdit, uMsg, wParam, lParam);
+        break;
     }
     return DefWndProc(hwnd, uMsg, wParam, lParam);
 }
@@ -104,6 +108,16 @@ void LineNumStatic::OnDrawClient(HWND hwnd, HDC hDC)
     // get margins
     DWORD dwMargins = DWORD(::SendMessage(hwndEdit, EM_GETMARGINS, 0, 0));
     INT leftmargin = LOWORD(dwMargins), rightmargin = HIWORD(dwMargins);
+
+    // Remember the full (unshrunk) client width so the final BitBlt below
+    // can still copy the whole client area to the screen DC. rcClient.right
+    // is about to be shrunk by leftmargin for the purposes of drawing the
+    // separator line and text columns; if the BitBlt used the shrunk width
+    // instead, the rightmost leftmargin-wide strip (right next to the edit
+    // control) would never be copied to the screen, leaving stale pixels
+    // from a previous paint visible there -- most noticeable when the
+    // column width changes, e.g. on Ctrl+Wheel zoom.
+    INT cxFull = rcClient.right;
 
     // shrink rectangle
     rcClient.right -= leftmargin;
@@ -256,8 +270,10 @@ void LineNumStatic::OnDrawClient(HWND hwnd, HDC hDC)
     }
     ::SelectObject(hdcMem, hFontOld);
 
-    // send the image to the window
-    ::BitBlt(hDC, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
+    // send the image to the window (use the full width, not the
+    // margin-shrunk rcClient.right, or the rightmost strip never gets
+    // copied to the screen and keeps showing stale pixels)
+    ::BitBlt(hDC, 0, 0, cxFull, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
     ::SelectObject(hdcMem, hbmOld);
 
     // clean up
@@ -301,7 +317,7 @@ void LineNumEdit::Prepare()
 
     if (m_hwndStatic)
     {
-        ::MoveWindow(m_hwndStatic, 0, 0, cxColumn, cyColumn, TRUE);
+        ::MoveWindow(m_hwndStatic, 0, 0, cxColumn, cyColumn, FALSE);
     }
     else
     {
@@ -389,7 +405,7 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (m_bSetRedraw)
             m_hwndStatic.Redraw();
         return ret;
-    case WM_VSCROLL: case WM_MOUSEWHEEL:
+    case WM_VSCROLL:
     case EM_SCROLL: case EM_SCROLLCARET: case EM_LINESCROLL:
         // Pure scrolling/caret-visibility messages: the text itself is
         // unchanged, so just repaint and let the static reuse its cached
@@ -400,8 +416,23 @@ LineNumEdit::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (m_bSetRedraw)
             m_hwndStatic.Redraw();
         return ret;
+    case WM_MOUSEWHEEL:
+        if (GetKeyState(VK_CONTROL) < 0)
+        {
+            UINT id = GetDlgCtrlID(hwnd);
+            if ((SHORT)HIWORD(wParam) < 0)
+                PostMessage(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(id, LNEN_ZOOMOUT), (LPARAM)hwnd);
+            else
+                PostMessage(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(id, LNEN_ZOOMIN), (LPARAM)hwnd);
+            return 0;
+        }
+        ret = DefWndProc(hwnd, uMsg, wParam, lParam);
+        if (m_bSetRedraw)
+            m_hwndStatic.Redraw();
+        return ret;
     case WM_SIZE: case WM_SETFONT:
         ret = DefWndProc(hwnd, uMsg, wParam, lParam);
+        m_cxColumn = 0; // clear cache
         Prepare();
         return ret;
     case EM_SETMARGINS:

@@ -4,8 +4,8 @@
 # CMake minimum version
 cmake_minimum_required(VERSION 3.10)
 
-# project name and language
-project(LineNumEdit CXX RC)
+# project name, version, and languages
+project(LineNumEdit VERSION 0.8 LANGUAGES CXX RC)
 
 ##############################################################################
 
