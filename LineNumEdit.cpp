@@ -57,7 +57,7 @@ LineNumStatic::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         DeleteProps(hwnd);
         break;
-    case WM_MOUSEHWHEEL:
+    case WM_MOUSEWHEEL:
         hwndEdit = GetEdit();
         PostMessage(hwndEdit, uMsg, wParam, lParam);
         break;
